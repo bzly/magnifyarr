@@ -45,6 +45,7 @@ services:
 | `SLOW_INTERVAL_DAYS` |  | int | `1` | Search interval (days) in slow tier |
 | `SLOWEST_AFTER_DAYS` |  | int | — | Age threshold (days) to enter slowest tier |
 | `SLOWEST_INTERVAL_DAYS` |  | int | `7` | Search interval (days) in slowest tier |
+| `LOG_LEVEL` |  | string | `INFO` | Logging verbosity. DEBUG will log per-episode tier eligibility decisions each run. |
 
 ## Avoiding indexer rate limits
 
