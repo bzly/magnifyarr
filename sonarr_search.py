@@ -11,6 +11,13 @@ General pattern:
 * Whilst Sonarr is processing the command, poll its status and log message updates.
 * Repeat every SEARCH_INTERVAL_MINUTES minutes.
 
+Endpoint docs:
+* To get the missing list: https://sonarr.tv/docs/api/#v3/tag/missing
+* To trigger an episode search: https://sonarr.tv/docs/api/#v3/tag/command/POST/api/v3/command
+    Valid commands aren't documented, legacy docs here have them and parameters:
+    https://nzbdrone.readthedocs.io/API/Command/
+* To check the status of the search: https://sonarr.tv/docs/api/#v3/tag/command/GET/api/v3/command/{id}
+
 Tier logic (disabled if env vars _AFTER_DAYS not set):
 * Episodes older than SLOW_AFTER_DAYS are only searched every SLOW_INTERVAL_DAYS days.
 * Episodes older than SLOWEST_AFTER_DAYS are only searched every SLOWEST_INTERVAL_DAYS days.
@@ -39,6 +46,7 @@ log = logging.getLogger(__name__)
 _ACTIVE_STATUSES = {"queued", "started"}
 
 # Fetch an arbitrarily large candidate pool to filter episodes from
+#   a response with 1000 episodes in would be ~500KB (est)
 _CANDIDATE_POOL_SIZE = 1000
 
 
@@ -142,7 +150,8 @@ class SonarrClient:
 
     def get_missing_episodes(self, page_size: int) -> list[dict]:
         """
-        Fetch up to page_size missing episodes (least recently searched first).
+        Fetch up to page_size missing episodes (least recently searched first)
+        from Sonarr's GET /wanted/missing endpoint.
         Pass _CANDIDATE_POOL_SIZE to get a full pool for tier filtering.
         """
         params = {
@@ -158,6 +167,7 @@ class SonarrClient:
 
     def trigger_episode_search(self, episode_ids: list[int]) -> dict:
         """
+        Sends a POST /command to trigger an EpisodeSearch for the given episode IDs.
         Equivalent to clicking the magnifying glass on the missing list.
         Returns the initial GET /command object (status = 'queued').
         """
@@ -174,7 +184,7 @@ class SonarrClient:
 
     def poll_command(self, command: dict, poll_interval: int = 1) -> Iterator[dict]:
         """
-        Poll GET /command until it leaves the active states.
+        Poll Sonarr's GET /command endpoint until it leaves the active states.
         Yield responses where the message has changed.
         """
         command_id = command["id"]
@@ -195,6 +205,7 @@ class SonarrClient:
                 log.error("Error polling command %d: %s", command_id, exc)
                 return
 
+        # ensure terminal state is seen even if message didn't change
         yield current
 
 
@@ -218,25 +229,19 @@ def _is_episode_eligible(ep: dict, config: Config) -> bool:
     * normal:       always eligible
     """
     last_search_raw = ep.get("lastSearchTime")
-    if not last_search_raw:
-        return True
-
     air_date_raw = ep.get("airDateUtc")
-    if not air_date_raw:
+    if not last_search_raw or not air_date_raw:
         return True
 
     now = datetime.now(timezone.utc)
     age_days          = (now - _parse_sonarr_dt(air_date_raw)).days
     days_since_search = (now - _parse_sonarr_dt(last_search_raw)).days
 
-    tiers = [
-        (config.slowest_after_days, config.slowest_interval_days, "slowest"),
-        (config.slow_after_days,    config.slow_interval_days,    "slow"),
-    ]
-    for after_days, interval_days, label in tiers:
-        if after_days and age_days >= after_days:
-            eligible = days_since_search >= interval_days
-            break
+    # if <in tier window> then <check whether tier interval time passed>, else <normal tier>
+    if config.slowest_after_days and age_days >= config.slowest_after_days:
+        eligible, label = days_since_search >= config.slowest_interval_days, "slowest"
+    elif config.slow_after_days and age_days >= config.slow_after_days:
+        eligible, label = days_since_search >= config.slow_interval_days, "slow"
     else:
         eligible, label = True, "normal"
 
