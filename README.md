@@ -22,15 +22,17 @@ Huntarr died, and I didn't want to use a possibly unsupported fork ([elfhosted/n
 
 ## Usage
 
+Deploy via Docker, here's an example `compose.yaml`:
+
 ```yaml
 services:
   magnifyarr:
     image: ghcr.io/bzly/magnifyarr:latest
     restart: unless-stopped
     environment:
-      SONARR_API_KEY: "your_api_key_here"   # Settings -> General
-      # SONARR_URL: "http://sonarr:8989"    # default
-      SLOW_AFTER_DAYS: 7                    # recommended to avoid rate limiting
+      SONARR_API_KEY: "your_api_key_here" # Sonarr -> Settings -> General
+      # SONARR_URL: "http://sonarr:8989"  # default
+      SLOW_AFTER_DAYS: 7                  # optional, but recommended to avoid rate limiting
 ```
 
 ## Configuration
