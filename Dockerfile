@@ -7,8 +7,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 RUN adduser --disabled-password --gecos "" appuser
 
-COPY --chown=appuser:appuser sonarr_search.py .
+COPY --chown=appuser:appuser magnifyarr.py .
 
 USER appuser
 
-CMD ["python", "-u", "sonarr_search.py"]
+CMD ["python", "-u", "magnifyarr.py"]
