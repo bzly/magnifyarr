@@ -175,7 +175,6 @@ class ArrClient:
             "page": 1,
             "sortKey": self.sort_key,
             "sortDirection": "ascending",
-            # TODO: does this key break moviessearch?
             "includeSeries": True,  # for better logging, but it does make the response bigglier
         }
         resp = self.session.get(self._url("/wanted/missing"), params=params, timeout=30)
