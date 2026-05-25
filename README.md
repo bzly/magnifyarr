@@ -1,20 +1,23 @@
 # magnifyarr
 
-Periodically searches for missing episodes in Sonarr, replicating the behaviour of clicking the magnifying glass in the _Wanted_ > _Missing_ list.
+Periodically searches for missing items in Sonarr and/or Radarr, replicating the behaviour of clicking the magnifying glass in the _Wanted_ > _Missing_ list.
 
 ## What
 
 What does it actually do?
 
-1. Fetches all missing episodes from Sonarr
-    * Optionally filters older episodes for less frequent searching
-2. Trigger a Sonarr EpisodeSearch command for the first 10 (`SEARCH_LIMIT`) eligible episodes
+1. Fetches all missing episodes from Sonarr and/or movies from Radarr
+    * Optionally filters older items for less frequent searching
+2. Trigger a Sonarr EpisodeSearch/Radarr MoviesSearch command for the first 10 (`SEARCH_LIMIT`) eligible episodes
 3. Repeat every 5 (`SEARCH_INTERVAL_MINUTES`) minutes
 
+If both Sonarr and Radarr are configured, they are interleaved to avoid simultaneous runs, e.g.:
+    with SEARCH_INTERVAL_MINUTES=10, Sonarr runs at :00, :10, :15, … and Radarr runs at :05, :15, :25, …
+
 It does **not**:
-* Perform SeasonSearch or SeriesSearch, so I have no idea whether/how it will pick up season packs. Probably fine, depending on Sonarr rules?
-* Trigger Radarr searches (yet? PRs welcome)
-* Support multiple Sonarr instances. You can deploy multiple instances of this, though (~26MB memory usage).
+* Perform SeasonSearch, so it will not pick up season packs (it's on the to-do list)
+* ~~Trigger Radarr searches (yet? PRs welcome)~~
+* Support multiple Sonarr instances. You can deploy multiple instances of this, though (~26MB memory usage) and super simple configuration.
 
 ## Why
 
@@ -32,22 +35,26 @@ services:
     environment:
       SONARR_API_KEY: "your_api_key_here" # Sonarr -> Settings -> General
       # SONARR_URL: "http://sonarr:8989"  # default
+      RADARR_API_KEY: "your_other_key"
+      # RADARR_URL: "http://radarr:7878
       SLOW_AFTER_DAYS: 7                  # optional, but recommended to avoid rate limiting
 ```
 
 ## Configuration
 
-| Variable | Required | Type | Default | Description |
-|---|---|---|---|---|
-| `SONARR_API_KEY` | :ballot_box_with_check: | string | — | Sonarr API key |
-| `SONARR_URL` |  | string | `http://sonarr:8989` | Sonarr instance URL |
-| `SEARCH_LIMIT` |  | int | `10` | Number of episodes to search per run |
-| `SEARCH_INTERVAL_MINUTES` |  | int | `5` | How frequently to run (minutes) |
-| `SLOW_AFTER_DAYS` |  | int | — | Age threshold (days) to enter slow tier |
-| `SLOW_INTERVAL_DAYS` |  | int | `1` | Search interval (days) in slow tier |
-| `SLOWEST_AFTER_DAYS` |  | int | — | Age threshold (days) to enter slowest tier |
-| `SLOWEST_INTERVAL_DAYS` |  | int | `7` | Search interval (days) in slowest tier |
-| `LOG_LEVEL` |  | string | `INFO` | Logging verbosity. DEBUG will log per-episode tier eligibility decisions each run. |
+| Variable | Conditionally Required | Default | Description |
+|---|---|---|---|
+| `SONARR_API_KEY` | :ballot_box_with_check: | — | Sonarr API key. Either this or `RADARR_API_KEY` must be defined. |
+| `SONARR_URL` |  | `http://sonarr:8989` | Sonarr instance URL |
+| `RADARR_API_KEY` | :ballot_box_with_check: | — | Radarr API key. Either this or `SONARR_API_KEY` must be defined. |
+| `RADARR_URL` |  | `http://radarr:7878` | Radarr instance URL |
+| `SEARCH_LIMIT` |  | `10` | Number of episodes to search per run |
+| `SEARCH_INTERVAL_MINUTES` |  | `5` | How frequently to run (minutes) |
+| `SLOW_AFTER_DAYS` |  | — | Age threshold (days) to enter slow tier |
+| `SLOW_INTERVAL_DAYS` |  | `1` | Search interval (days) in slow tier |
+| `SLOWEST_AFTER_DAYS` |  | — | Age threshold (days) to enter slowest tier |
+| `SLOWEST_INTERVAL_DAYS` |  | `7` | Search interval (days) in slowest tier |
+| `LOG_LEVEL` |  | `INFO` | Logging verbosity. DEBUG will log per-episode tier eligibility decisions each run. |
 
 ## Avoiding indexer rate limits
 
