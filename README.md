@@ -12,7 +12,7 @@ What does it actually do?
 3. Repeat every 5 (`SEARCH_INTERVAL_MINUTES`) minutes
 
 If both Sonarr and Radarr are configured, they are interleaved to avoid simultaneous runs, e.g.:
-    with SEARCH_INTERVAL_MINUTES=10, Sonarr runs at :00, :10, :15, … and Radarr runs at :05, :15, :25, …
+    with SEARCH_INTERVAL_MINUTES=10, Sonarr runs at :00, :10, :20, … and Radarr runs at :05, :15, :25, …
 
 It does **not**:
 * Perform SeasonSearch, so it will not pick up season packs (it's on the to-do list)
