@@ -46,32 +46,12 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-# Sonarr /command statuses that mean "in progress" - used in SonarrClient.poll_command()
+# Sonarr /command statuses that mean "in progress" - used in ArrClient.poll_command()
 _ACTIVE_STATUSES = {"queued", "started"}
 
 # Fetch an arbitrarily large candidate pool to filter episodes from
 #   a response with 1000 episodes in would be ~500KB (est)
 _CANDIDATE_POOL_SIZE = 1000
-
-
-def _positive_int(name: str, default: int) -> int:
-    """Read a required or defaulted positive integer from the environment."""
-    raw = os.getenv(name, str(default))
-    try:
-        value = int(raw)
-        if value < 1:
-            raise ValueError
-        return value
-    except ValueError:
-        log.error("Env var %s must be a positive integer, got: %r", name, raw)
-        sys.exit(1)
-
-
-def _optional_positive_int(name: str) -> int | None:
-    """Read an optional positive integer from the environment."""
-    if os.getenv(name) is None:
-        return None
-    return _positive_int(name, 0)  # var is set - default val unreachable
 
 
 @dataclass
@@ -90,23 +70,38 @@ class Config:
     @classmethod
     def from_env(cls) -> Self:
         """Read environment variables, check validity, set defaults."""
+
+        def _positive_int(name: str, default: int) -> int:
+            """Read a required or defaulted positive integer from the environment."""
+            raw = os.getenv(name, str(default))
+            try:
+                value = int(raw)
+                if value < 1:
+                    raise ValueError
+                return value
+            except ValueError:
+                raise ValueError(f"Env var {name} must be a positive integer, got: {raw!r}")
+
+        def _optional_positive_int(name: str) -> int | None:
+            """Read an optional positive integer from the environment."""
+            if os.getenv(name) is None:
+                return None
+            return _positive_int(name, 0)  # var is set - default val unreachable
+
         sonarr_api_key = os.getenv("SONARR_API_KEY")
         radarr_api_key = os.getenv("RADARR_API_KEY")
 
         if not sonarr_api_key and not radarr_api_key:
-            log.error("At least one of SONARR_API_KEY or RADARR_API_KEY must be set.")
-            sys.exit(1)
+            raise EnvironmentError("At least one of SONARR_API_KEY or RADARR_API_KEY must be set.")
 
         slow_after_days    = _optional_positive_int("SLOW_AFTER_DAYS")
         slowest_after_days = _optional_positive_int("SLOWEST_AFTER_DAYS")
 
         if slow_after_days and slowest_after_days and slow_after_days >= slowest_after_days:
-            log.error(
-                "SLOW_AFTER_DAYS (%d) must be less than SLOWEST_AFTER_DAYS (%d)",
-                slow_after_days,
-                slowest_after_days,
+            raise ValueError(
+                f"SLOW_AFTER_DAYS ({slow_after_days}) must be less than "
+                f"SLOWEST_AFTER_DAYS ({slowest_after_days})"
             )
-            sys.exit(1)
 
         return cls(
             sonarr_base_url=       os.getenv("SONARR_URL", "http://sonarr:8989").rstrip("/"),
@@ -198,11 +193,12 @@ class ArrClient:
         resp.raise_for_status()
         return resp.json()
 
-    def poll_command(self, command: dict, poll_interval: int = 1) -> Iterator[dict]:
+    def poll_command(self, command: dict) -> Iterator[dict]:
         """
         Poll GET /command until it leaves the active states.
         Yield responses where the message has changed.
         """
+        poll_interval_seconds = 0.5
         command_id = command["id"]
         last_message: str | None = None
         current = command
@@ -213,22 +209,17 @@ class ArrClient:
                 last_message = message
                 yield current
 
-            time.sleep(poll_interval)
+            time.sleep(poll_interval_seconds)
 
             try:
                 current = self.get_command(command_id)
             except requests.RequestException as exc:
-                log.error("Error polling command %d: %s", command_id, exc)
+                log.warning("Error polling command %d: %s", command_id, exc)
                 return
 
         # ensure terminal state is seen even if message didn't change
         yield current
 
-    @staticmethod
-    def _parse_dt(raw: str) -> datetime:
-        """Parse a UTC datetime string to an aware datetime."""
-        return datetime.fromisoformat(raw.replace("Z", "+00:00"))
-    
     def is_item_eligible(self, item: dict, config: Config) -> bool:
         """
         Returns True if the item should be searched this run.
@@ -237,8 +228,8 @@ class ArrClient:
         attempt at least one search before applying backoff.
 
         Otherwise, eligibility is determined by age (airDateUtc/releaseDate) and
-        how recently it was last searched (lastSearchTime). Tiers are checked
-        from most to least restrictive; the first matching threshold wins:
+        how recently it was last searched (lastSearchTime). Tiers need to be
+        checked from oldest to newest; the first matching threshold wins:
         * slowest tier: search at most every SLOWEST_INTERVAL_DAYS days
         * slow tier:    search at most every SLOW_INTERVAL_DAYS days
         * normal:       always eligible
@@ -249,9 +240,11 @@ class ArrClient:
             return True
 
         now               = datetime.now(timezone.utc)
-        age_days          = (now - self._parse_dt(release_date_raw)).days
-        days_since_search = (now - self._parse_dt(last_search_raw)).days
-    
+        release_date      = datetime.fromisoformat(release_date_raw.replace("Z", "+00:00"))
+        last_search       = datetime.fromisoformat(last_search_raw.replace("Z", "+00:00"))
+        age_days          = (now - release_date).days
+        days_since_search = (now - last_search).days
+
         # if <in tier window> then <check whether tier interval time passed>, else <normal tier>
         if config.slowest_after_days and age_days >= config.slowest_after_days:
             eligible, label = days_since_search >= config.slowest_interval_days, "slowest"
@@ -290,14 +283,14 @@ class RadarrClient(ArrClient):
     def item_label(self, item: dict) -> str:
         return f"{item.get('title', 'Unknown')} ({item.get('year', '?')})"
 
+
 def run_search_cycle(client: ArrClient, config: Config) -> None:
     log.info("[%s] Fetching candidate missing items…", client.display_name)
 
     try:
         all_items = client.get_missing(page_size=_CANDIDATE_POOL_SIZE)
     except requests.RequestException as exc:
-        log.error("Failed to fetch missing items: %s", exc)
-        return
+        raise requests.RequestException(f"Failed to fetch missing items: {exc}") from exc
 
     if not all_items:
         log.info("No missing items.")
@@ -324,8 +317,7 @@ def run_search_cycle(client: ArrClient, config: Config) -> None:
     try:
         command = client.trigger_search([item["id"] for item in items])
     except requests.RequestException as exc:
-        log.error("Failed to trigger search: %s", exc)
-        return
+        raise requests.RequestException(f"Failed to trigger search: {exc}") from exc
 
     log.info("Search command queued (id: %s)", command["id"])
 
@@ -334,13 +326,13 @@ def run_search_cycle(client: ArrClient, config: Config) -> None:
         message = update.get("message", "")
         log.info("\t→ [%s: %s] %s", command["id"], status, message)
 
-def run_client(client: ArrClient, config: Config) -> None:
-    """Run a search cycle for a single client."""
-    run_search_cycle(client, config)
-
 
 def main() -> None:
-    config = Config.from_env()
+    try:
+        config = Config.from_env()
+    except (ValueError, EnvironmentError) as e:
+        log.error(e)
+        sys.exit(1)
 
     # At least one of these is guaranteed to be non-empty by Config.from_env()
     clients: list[ArrClient] = []
@@ -349,14 +341,20 @@ def main() -> None:
     if config.radarr_api_key:
         clients.append(RadarrClient(config.radarr_base_url, config.radarr_api_key))
 
+    # Startup logging, health check.
     config.log_startup(" + ".join(c.display_name for c in clients))
-
+    for client in clients:
+        if not client.ping():
+            log.warning("%s unreachable on startup (will retry each cycle).", client.display_name)
 
     # If both clients are active, interleave them so they don't run simultaneously.
-    # Each client still runs every SEARCH_INTERVAL_MINUTES
+    # Each client still runs every SEARCH_INTERVAL_MINUTES.
     while True:
         for client in clients:
-            run_client(client, config)
+            try:
+                run_search_cycle(client, config)
+            except requests.RequestException as e:
+                log.error("[%s] %s", client.display_name, e)
             sleep_seconds = config.interval_minutes * 60 / len(clients)
             log.info("Sleeping for %g minutes…", sleep_seconds / 60)
             time.sleep(sleep_seconds)
